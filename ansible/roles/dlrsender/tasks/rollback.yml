@@ -1,0 +1,28 @@
+---
+- name: Abort rollback if no previous known-good tag is recorded for any instance
+  ansible.builtin.fail:
+    msg: "No previous known-good tag recorded for {{ item.key }} - cannot roll back automatically. Manual intervention required."
+  when: item.value == ''
+  loop: "{{ dlrsender_previous_tags | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Re-deploy previous known-good image, per instance
+  ansible.builtin.include_tasks: "{{ 'deploy_standalone.yml' if dlrsender_deploy_mode == 'standalone' else 'deploy_shared_compose.yml' }}"
+  vars:
+    dlrsender_image: "{{ dlrsender_image.split(':')[0] }}:{{ dlrsender_previous_tags[item.name] }}"
+    dlrsender_instances: "[{{ item }}]"   # scope the deploy to just this one instance
+  loop: "{{ dlrsender_instances }}"
+  loop_control:
+    loop_var: item
+    label: "{{ item.name }} -> {{ dlrsender_previous_tags[item.name] }}"
+
+- name: Verify health of the rolled-back version
+  ansible.builtin.include_tasks: healthcheck.yml
+
+- name: Rollback summary
+  ansible.builtin.debug:
+    msg: "ROLLBACK COMPLETE: {{ item.key }} restored to {{ item.value }} and passed health check."
+  loop: "{{ dlrsender_previous_tags | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"

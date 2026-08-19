@@ -1,0 +1,7 @@
+---
+- name: Deploy DLR Sender
+  hosts: all
+  become: true
+
+  roles:
+    - dlrsender

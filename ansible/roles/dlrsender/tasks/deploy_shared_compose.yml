@@ -1,0 +1,41 @@
+---
+# Production's docker-compose.yml has other services in it that we must not
+# touch. We never rewrite the whole file - we surgically patch only
+# services.<dlrsender_compose_service>.image, then restart only that service.
+
+- name: Backup shared compose file before editing
+  ansible.builtin.copy:
+    src: "{{ dlrsender_compose_file }}"
+    dest: "{{ dlrsender_compose_file }}.bak.{{ ansible_date_time.iso8601_basic_short }}"
+    remote_src: true
+    mode: preserve
+
+- name: Ensure YAML patch script is present on target host
+  ansible.builtin.copy:
+    src: update_service_tag.py
+    dest: /opt/dlrsender/update_service_tag.py
+    mode: "0750"
+
+- name: Patch ONLY the dlrsender service image tag in the shared compose file
+  ansible.builtin.command:
+    argv:
+      - python3
+      - /opt/dlrsender/update_service_tag.py
+      - "{{ dlrsender_compose_file }}"
+      - "{{ dlrsender_compose_service }}"
+      - "{{ dlrsender_image }}"
+  register: patch_result
+  changed_when: "'updated' in patch_result.stdout"
+
+- name: Recreate ONLY the dlrsender service (--no-deps guarantees sibling services aren't restarted)
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - -f
+      - "{{ dlrsender_compose_file }}"
+      - up
+      - -d
+      - --no-deps
+      - "{{ dlrsender_compose_service }}"
+  changed_when: true

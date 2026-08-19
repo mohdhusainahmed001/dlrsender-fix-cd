@@ -1,0 +1,12 @@
+---
+- name: Read last-known-good tag per instance from state file
+  ansible.builtin.set_fact:
+    dlrsender_previous_tags: >-
+      {{
+        dlrsender_previous_tags | default({}) | combine({
+          item.name: (lookup('file', dlrsender_state_dir + '/' + item.name + '.last_good_tag', errors='ignore') | default('', true))
+        })
+      }}
+  loop: "{{ dlrsender_instances }}"
+  loop_control:
+    label: "{{ item.name }}"

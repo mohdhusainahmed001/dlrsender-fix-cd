@@ -1,0 +1,77 @@
+---
+- name: Validate DLR Sender image
+  ansible.builtin.assert:
+    that:
+      - dlrsender_image | length > 0
+    fail_msg: "dlrsender_image must be provided."
+
+- name: Validate Kafka brokers are set for every instance
+  ansible.builtin.assert:
+    that:
+      - (item.kafka_brokers | default(dlrsender_kafka_brokers)) | length > 0
+    fail_msg: "kafka_brokers must be provided for instance {{ item.name }}."
+  loop: "{{ dlrsender_instances }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Ensure state directory exists (stores last-known-good tag for rollback)
+  ansible.builtin.file:
+    path: "{{ dlrsender_state_dir }}"
+    state: directory
+    mode: "0750"
+
+- name: Ensure DLR Sender Docker network exists
+  community.docker.docker_network:
+    name: "{{ dlrsender_network }}"
+    state: present
+  when: dlrsender_deploy_mode == 'standalone'
+
+- name: Read last-known-good tag per instance (empty string if none recorded yet)
+  ansible.builtin.include_tasks: capture_previous_state.yml
+
+- name: Deploy and verify DLR Sender
+  block:
+    - name: Pull requested image
+      community.docker.docker_image:
+        name: "{{ dlrsender_image }}"
+        source: pull
+
+    - name: Deploy standalone container(s)
+      ansible.builtin.include_tasks: deploy_standalone.yml
+      when: dlrsender_deploy_mode == 'standalone'
+
+    - name: Deploy via shared production compose file (image tag only)
+      ansible.builtin.include_tasks: deploy_shared_compose.yml
+      when: dlrsender_deploy_mode == 'shared_compose'
+
+    - name: Health check every instance
+      ansible.builtin.include_tasks: healthcheck.yml
+
+    - name: Persist this tag as last-known-good for every instance
+      ansible.builtin.copy:
+        dest: "{{ dlrsender_state_dir }}/{{ item.name }}.last_good_tag"
+        content: "{{ dlrsender_image.split(':')[-1] }}"
+        mode: "0640"
+      loop: "{{ dlrsender_instances }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Deployment summary
+      ansible.builtin.debug:
+        msg: "SUCCESS: {{ dlrsender_image }} is healthy on all {{ dlrsender_instances | length }} instance(s)."
+
+  rescue:
+    - name: Deployment failed - report before rollback
+      ansible.builtin.debug:
+        msg: "FAILURE deploying {{ dlrsender_image }}. rollback_enabled={{ rollback_enabled }}"
+
+    - name: Roll back to previous known-good image(s)
+      ansible.builtin.include_tasks: rollback.yml
+      when: rollback_enabled | bool
+
+    - name: Fail the play so Jenkins marks this run as FAILED
+      ansible.builtin.fail:
+        msg: >-
+          Deployment of {{ dlrsender_image }} failed.
+          {{ 'Rollback was attempted - see preceding tasks for the restored version and its health check result.'
+             if rollback_enabled | bool else 'Rollback was disabled for this run.' }}
