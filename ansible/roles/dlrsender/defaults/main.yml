@@ -1,7 +1,7 @@
 ---
 dlrsender_deploy_mode: standalone   # standalone | shared_compose
 
-# --- existing single-instance vars (kept for backward compatibility) ---
+# --- existing single-instance vars ---
 dlrsender_container_name: dlrsender
 dlrsender_image: ""
 dlrsender_container_port: 15000
@@ -10,11 +10,15 @@ dlrsender_network: dlrsender-net
 dlrsender_kafka_brokers: ""
 dlrsender_restart_policy: always
 
+# --- Docker/Nexus registry ---
+# Used by the DLR Sender application from inside the container.
+# Nexus is connected to the dlrsender-net Docker network.
+dlrsender_registry_ip: "nexus"
+dlrsender_registry_port: "8082"
+
 # --- multi-instance support ---
-# If an inventory/group_vars file doesn't define dlrsender_instances explicitly,
-# a single instance is built from the vars above, so existing inventories
-# (like qa.ini) keep working with zero changes. To run N instances, just set
-# dlrsender_instances directly in group_vars - no role/task changes needed.
+# If dlrsender_instances is not defined in inventory/group_vars,
+# one instance is automatically created from the variables above.
 dlrsender_instances: >-
   {{
     [{
@@ -26,15 +30,17 @@ dlrsender_instances: >-
     }]
   }}
 
-# --- shared_compose mode (production) ---
+# --- shared_compose mode ---
 dlrsender_compose_file: ""          # e.g. /opt/platform/docker-compose.yml
 dlrsender_compose_service: dlrsender
 
-# --- health check + rollback ---
+# --- registry authentication ---
+# Used by Ansible for Docker registry login and image pull.
 dlrsender_registry: ""
 dlrsender_registry_user: ""
 dlrsender_registry_pass: ""
 
+# --- health check + rollback ---
 rollback_enabled: true
 health_check_retries: 10
 health_check_delay: 5

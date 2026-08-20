@@ -1,22 +1,20 @@
 ---
-# NOTE: this checks that the container is running AND accepting TCP
-# connections on its published port. Swap in a real HTTP check (e.g. a
-# /health or /metrics endpoint) here once one is confirmed for dlrsender -
-# this is a safe baseline in the meantime, not a guess dressed up as fact.
-
-- name: Wait for each instance to accept connections on its published port
-  ansible.builtin.wait_for:
-    host: "127.0.0.1"
-    port: "{{ item.host_port }}"
-    state: started
-    delay: "{{ health_check_delay }}"
-    timeout: "{{ health_check_retries * health_check_delay }}"
+- name: Check DLR Sender HTTP metrics endpoint
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ item.host_port }}/metrics"
+    method: GET
+    status_code: 200
+    return_content: false
+  register: dlrsender_http_health
+  retries: "{{ health_check_retries }}"
+  delay: "{{ health_check_delay }}"
+  until: dlrsender_http_health.status == 200
   loop: "{{ dlrsender_instances }}"
   loop_control:
     label: "{{ item.name }}"
   when: dlrsender_deploy_mode == 'standalone'
 
-- name: Verify each standalone container is actually in a running state
+- name: Verify each standalone container is actually running
   community.docker.docker_container_info:
     name: "{{ item.container_name }}"
   register: dlrsender_health_standalone
@@ -28,7 +26,7 @@
     label: "{{ item.name }}"
   when: dlrsender_deploy_mode == 'standalone'
 
-- name: Verify the shared-compose dlrsender service is running (production)
+- name: Verify shared-compose DLR Sender service is running
   community.docker.docker_container_info:
     name: "{{ dlrsender_compose_service }}"
   register: dlrsender_health_compose
@@ -39,7 +37,7 @@
 
 - name: All instances healthy
   ansible.builtin.debug:
-    msg: "{{ item.name }} healthy on port {{ item.host_port }}"
+    msg: "SUCCESS: {{ item.name }} healthy at http://127.0.0.1:{{ item.host_port }}/metrics"
   loop: "{{ dlrsender_instances }}"
   loop_control:
     label: "{{ item.name }}"

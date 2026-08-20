@@ -1,5 +1,5 @@
 ---
-- name: Stop existing container (if any)
+- name: Stop existing DLR Sender container(s)
   community.docker.docker_container:
     name: "{{ item.container_name }}"
     state: absent
@@ -7,18 +7,24 @@
   loop_control:
     label: "{{ item.name }}"
 
-- name: Run new container(s) - config-driven, same logic for 1..N instances
+- name: Run DLR Sender container(s)
   community.docker.docker_container:
     name: "{{ item.container_name }}"
     image: "{{ dlrsender_image }}"
     state: started
     restart_policy: "{{ dlrsender_restart_policy }}"
+
     networks:
       - name: "{{ dlrsender_network }}"
+
     ports:
       - "{{ item.host_port }}:{{ item.container_port | default(dlrsender_container_port) }}"
+
     env:
       KAFKA_BROKERS: "{{ item.kafka_brokers | default(dlrsender_kafka_brokers) }}"
+      REGISTRY_IP: "{{ dlrsender_registry_ip }}"
+      REGISTRY_PORT: "{{ dlrsender_registry_port }}"
+
   loop: "{{ dlrsender_instances }}"
   loop_control:
     label: "{{ item.name }}"

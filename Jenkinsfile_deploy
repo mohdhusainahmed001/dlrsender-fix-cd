@@ -1,104 +1,258 @@
 pipeline {
-    agent { label 'erlang-agent' }
+
+    agent {
+        label 'erlang-agent'
+    }
 
     parameters {
+
         choice(
             name: 'ENVIRONMENT',
             choices: ['dev', 'qa', 'uat', 'prod'],
-            description: 'Target environment'
+            description: 'Target deployment environment'
         )
 
         string(
             name: 'IMAGE_TAG',
             defaultValue: '',
-            description: 'Tag already pushed by the CI pipeline, e.g. release-45 or main-102'
+            description: 'Docker image tag already pushed to Nexus, e.g. omni_v2-48'
         )
 
         booleanParam(
             name: 'ROLLBACK_ENABLED',
             defaultValue: true,
-            description: 'Automatically roll back to the previous known-good version if health checks fail'
+            description: 'Automatically rollback to the previous known-good image if deployment or health checks fail'
         )
     }
 
     environment {
-        // Jenkins container -> Nexus container
+
+        /*
+         * Jenkins container -> Nexus container
+         */
         REGISTRY_URL = 'nexus:8082'
 
-        // Docker host -> Nexus
+        /*
+         * Docker host / Ansible target -> Nexus
+         */
         NEXUS_HOST_REGISTRY = 'localhost:8082'
 
-        // Repository path inside Nexus
+        /*
+         * Nexus Docker repository
+         */
         REPO_PATH = "onex-docker/erlang-dlrsender/${params.ENVIRONMENT}"
 
-        // Full image address used inside Jenkins
+        /*
+         * Image used by Jenkins when communicating with Nexus
+         */
         DLRSENDER_IMAGE = "${REGISTRY_URL}/${REPO_PATH}:${params.IMAGE_TAG.trim()}"
 
+        /*
+         * Ansible configuration
+         */
         ANSIBLE_DIR = 'ansible'
-        INVENTORY_FILE = "${ANSIBLE_DIR}/inventory/${params.ENVIRONMENT}.ini"
-        PLAYBOOK = "${ANSIBLE_DIR}/deploy.yml"
+        PLAYBOOK = 'ansible/deploy.yml'
+        INVENTORY_FILE = "ansible/inventory/${params.ENVIRONMENT}.ini"
 
+        /*
+         * Jenkins credential containing Nexus username/password
+         */
         NEXUS_CREDS_ID = 'nexus-creds'
     }
 
     options {
+
         timestamps()
+
         disableConcurrentBuilds()
-        buildDiscarder(logRotator(numToKeepStr: '30'))
+
+        buildDiscarder(
+            logRotator(
+                numToKeepStr: '30'
+            )
+        )
     }
 
     stages {
 
+        /*
+         * ---------------------------------------------------------
+         * 1. Validate Jenkins parameters
+         * ---------------------------------------------------------
+         */
         stage('Validate Parameters') {
+
             steps {
+
                 script {
-                    if (!params.IMAGE_TAG?.trim()) {
+
+                    def imageTag = params.IMAGE_TAG?.trim()
+
+                    if (!imageTag) {
                         error(
-                            "IMAGE_TAG is required. Example: release-45 or main-102"
+                            'IMAGE_TAG is required. Example: omni_v2-48'
                         )
                     }
 
-                    if (!(params.IMAGE_TAG.trim() ==~ /^[a-zA-Z0-9_.\-]+$/)) {
+                    if (!(imageTag ==~ /^[a-zA-Z0-9_.-]+$/)) {
                         error(
-                            "IMAGE_TAG contains invalid characters: '${params.IMAGE_TAG}'"
+                            "IMAGE_TAG contains invalid characters: '${imageTag}'"
                         )
                     }
 
+                    echo '=========================================='
+                    echo 'Deployment Parameters'
+                    echo '=========================================='
                     echo "Environment : ${params.ENVIRONMENT}"
-                    echo "Image Tag   : ${params.IMAGE_TAG}"
-                    echo "Image       : ${env.DLRSENDER_IMAGE}"
+                    echo "Image Tag   : ${imageTag}"
+                    echo "Repository  : ${env.REPO_PATH}"
+                    echo "Jenkins URL : ${env.DLRSENDER_IMAGE}"
+                    echo "Target URL  : ${env.NEXUS_HOST_REGISTRY}/${env.REPO_PATH}:${imageTag}"
+                    echo "Rollback    : ${params.ROLLBACK_ENABLED}"
+                    echo '=========================================='
                 }
             }
         }
 
+        /*
+         * ---------------------------------------------------------
+         * 2. Checkout repository
+         * ---------------------------------------------------------
+         */
         stage('Checkout') {
+
             steps {
+
                 checkout scm
+
+                sh '''
+                    set -e
+
+                    echo "Repository:"
+                    pwd
+
+                    echo
+                    echo "Files:"
+                    ls -la
+
+                    echo
+                    echo "Ansible files:"
+                    find ansible -maxdepth 4 -type f | sort
+                '''
             }
         }
 
-        stage('Validate Inventory') {
+        /*
+         * ---------------------------------------------------------
+         * 3. Validate required Ansible files
+         * ---------------------------------------------------------
+         */
+        stage('Validate Ansible Configuration') {
+
             steps {
-                sh """
+
+                sh '''
                     set -e
 
-                    if [ ! -f "${INVENTORY_FILE}" ]; then
-                        echo "ERROR: Inventory file missing: ${INVENTORY_FILE}"
-                        exit 1
-                    fi
+                    echo "Checking required files..."
 
-                    echo "Validating inventory: ${INVENTORY_FILE}"
+                    test -f "${INVENTORY_FILE}" || {
+                        echo "ERROR: Inventory file not found:"
+                        echo "${INVENTORY_FILE}"
+                        exit 1
+                    }
+
+                    test -f "${PLAYBOOK}" || {
+                        echo "ERROR: Playbook not found:"
+                        echo "${PLAYBOOK}"
+                        exit 1
+                    }
+
+                    test -f "ansible/roles/dlrsender/tasks/main.yml"
+                    test -f "ansible/roles/dlrsender/tasks/deploy_standalone.yml"
+                    test -f "ansible/roles/dlrsender/tasks/healthcheck.yml"
+                    test -f "ansible/roles/dlrsender/tasks/rollback.yml"
+
+                    echo "Required files are present."
+
+                    echo
+                    echo "Validating inventory..."
 
                     ansible-inventory \
                         -i "${INVENTORY_FILE}" \
                         --list > /dev/null
 
                     echo "Inventory validation successful."
-                """
+                '''
             }
         }
 
+        /*
+         * ---------------------------------------------------------
+         * 4. Validate Ansible syntax
+         * ---------------------------------------------------------
+         */
+        stage('Ansible Syntax Check') {
+
+            steps {
+
+                sh '''
+                    set -e
+
+                    echo "Running Ansible syntax check..."
+
+                    ansible-playbook \
+                        -i "${INVENTORY_FILE}" \
+                        "${PLAYBOOK}" \
+                        --syntax-check
+
+                    echo "Ansible syntax check successful."
+                '''
+            }
+        }
+
+        /*
+         * ---------------------------------------------------------
+         * 5. Check Jenkins -> Nexus connectivity
+         * ---------------------------------------------------------
+         */
+        stage('Check Nexus Connectivity') {
+
+            steps {
+
+                sh '''
+                    set -e
+
+                    echo "Checking Jenkins -> Nexus connectivity..."
+
+                    HTTP_STATUS=$(curl -s \
+                        -o /tmp/nexus_root_response \
+                        -w "%{http_code}" \
+                        "http://${REGISTRY_URL}/v2/")
+
+                    echo "Nexus HTTP status: ${HTTP_STATUS}"
+
+                    /*
+                     * 401 is expected because /v2/ requires authentication.
+                     */
+                    if [ "${HTTP_STATUS}" != "401" ] && [ "${HTTP_STATUS}" != "200" ]; then
+                        echo "ERROR: Jenkins cannot reach Nexus."
+                        cat /tmp/nexus_root_response || true
+                        exit 1
+                    fi
+
+                    echo "SUCCESS: Jenkins can reach Nexus."
+                '''
+            }
+        }
+
+        /*
+         * ---------------------------------------------------------
+         * 6. Production/UAT approval
+         * ---------------------------------------------------------
+         */
         stage('Approval') {
+
             when {
                 expression {
                     params.ENVIRONMENT in ['uat', 'prod']
@@ -106,15 +260,23 @@ pipeline {
             }
 
             steps {
+
                 input(
                     message: "Deploy ${env.DLRSENDER_IMAGE} to ${params.ENVIRONMENT}?",
-                    ok: "Deploy"
+                    ok: 'Deploy'
                 )
             }
         }
 
+        /*
+         * ---------------------------------------------------------
+         * 7. Verify image exists in Nexus
+         * ---------------------------------------------------------
+         */
         stage('Verify Image Exists in Nexus') {
+
             steps {
+
                 withCredentials([
                     usernamePassword(
                         credentialsId: "${NEXUS_CREDS_ID}",
@@ -122,48 +284,118 @@ pipeline {
                         passwordVariable: 'NEXUS_PASS'
                     )
                 ]) {
-                    sh '''#!/bin/bash
+
+                    sh '''
                         set -e
 
                         echo "=========================================="
                         echo "Checking Docker image in Nexus"
                         echo "=========================================="
-                        echo "Registry : $REGISTRY_URL"
-                        echo "Repository: $REPO_PATH"
-                        echo "Image Tag : $IMAGE_TAG"
+                        echo "Repository : ${REPO_PATH}"
+                        echo "Image Tag  : ${IMAGE_TAG}"
                         echo "=========================================="
 
                         HTTP_STATUS=$(curl -s \
-                            -o /tmp/nexus_check_response.json \
+                            -o /tmp/nexus_manifest.json \
                             -w "%{http_code}" \
-                            -u "$NEXUS_USER:$NEXUS_PASS" \
+                            -u "${NEXUS_USER}:${NEXUS_PASS}" \
                             -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
                             "http://${REGISTRY_URL}/v2/${REPO_PATH}/manifests/${IMAGE_TAG}")
 
-                        echo "Nexus responded with HTTP $HTTP_STATUS"
+                        echo "Nexus responded with HTTP ${HTTP_STATUS}"
 
-                        if [ -s /tmp/nexus_check_response.json ]; then
-                            echo "Nexus response:"
-                            cat /tmp/nexus_check_response.json
+                        if [ "${HTTP_STATUS}" != "200" ]; then
+
                             echo
-                        fi
+                            echo "ERROR: Docker image does not exist in Nexus."
+                            echo "Repository: ${REPO_PATH}"
+                            echo "Tag       : ${IMAGE_TAG}"
+                            echo "HTTP      : ${HTTP_STATUS}"
 
-                        if [ "$HTTP_STATUS" != "200" ]; then
-                            echo "ERROR: Image does not exist in Nexus."
-                            echo "Image: $DLRSENDER_IMAGE"
-                            echo "HTTP Status: $HTTP_STATUS"
+                            if [ -s /tmp/nexus_manifest.json ]; then
+                                cat /tmp/nexus_manifest.json
+                            fi
+
                             exit 1
                         fi
 
-                        echo "SUCCESS: Image exists in Nexus."
-                        echo "Image: $DLRSENDER_IMAGE"
+                        echo
+                        echo "SUCCESS: Docker image exists in Nexus."
+                        echo "Image: ${DLRSENDER_IMAGE}"
                     '''
                 }
             }
         }
 
-        stage('Deploy via Ansible') {
+        /*
+         * ---------------------------------------------------------
+         * 8. Check Docker access on Jenkins agent
+         * ---------------------------------------------------------
+         */
+        stage('Validate Docker Access') {
+
             steps {
+
+                sh '''
+                    set -e
+
+                    echo "Checking Docker access..."
+
+                    docker version
+
+                    echo
+                    echo "Checking Nexus container..."
+
+                    docker ps --format 'table {{.Names}}\\t{{.Image}}\\t{{.Status}}' \
+                        | grep -E '^nexus[[:space:]]' || {
+                            echo "WARNING: Nexus container is not visible from Jenkins agent."
+                        }
+                '''
+            }
+        }
+
+        /*
+         * ---------------------------------------------------------
+         * 9. Verify Ansible can use Docker
+         * ---------------------------------------------------------
+         */
+        stage('Validate Ansible Docker Access') {
+
+            steps {
+
+                sh '''
+                    set -e
+
+                    echo "Testing Ansible -> localhost..."
+
+                    ansible \
+                        -i "${INVENTORY_FILE}" \
+                        all \
+                        -m ping
+
+                    echo
+                    echo "Testing Ansible Docker collection..."
+
+                    ansible \
+                        -i "${INVENTORY_FILE}" \
+                        all \
+                        -m community.docker.docker_info
+
+                    echo
+                    echo "Ansible Docker access successful."
+                '''
+            }
+        }
+
+        /*
+         * ---------------------------------------------------------
+         * 10. Deploy using Ansible
+         * ---------------------------------------------------------
+         */
+        stage('Deploy via Ansible') {
+
+            steps {
+
                 withCredentials([
                     usernamePassword(
                         credentialsId: "${NEXUS_CREDS_ID}",
@@ -171,52 +403,132 @@ pipeline {
                         passwordVariable: 'NEXUS_PASS'
                     )
                 ]) {
-                    sh """#!/bin/bash
+
+                    sh '''
                         set -e
 
                         echo "=========================================="
-                        echo "Starting Ansible deployment"
+                        echo "Starting DLR Sender Deployment"
                         echo "=========================================="
-                        echo "Environment : ${params.ENVIRONMENT}"
-                        echo "Image       : ${NEXUS_HOST_REGISTRY}/${REPO_PATH}:${params.IMAGE_TAG.trim()}"
+
+                        echo "Environment : ${ENVIRONMENT}"
+                        echo "Image       : ${NEXUS_HOST_REGISTRY}/${REPO_PATH}:${IMAGE_TAG}"
                         echo "Inventory   : ${INVENTORY_FILE}"
                         echo "Playbook    : ${PLAYBOOK}"
-                        echo "Rollback    : ${params.ROLLBACK_ENABLED}"
+                        echo "Rollback    : ${ROLLBACK_ENABLED}"
+
                         echo "=========================================="
+
+                        /*
+                         * Jenkins must be able to execute sudo
+                         * without an interactive password prompt.
+                         *
+                         * Example:
+                         * sudo -n true
+                         */
+                        echo "Checking passwordless sudo..."
+
+                        if ! sudo -n true 2>/dev/null; then
+                            echo
+                            echo "ERROR: Jenkins agent requires passwordless sudo."
+                            echo
+                            echo "The Ansible playbook uses become: true."
+                            echo "Configure the Jenkins agent user with NOPASSWD sudo."
+                            exit 1
+                        fi
+
+                        echo "Passwordless sudo check successful."
+
+                        echo
+                        echo "Running Ansible deployment..."
 
                         ansible-playbook \
                             -i "${INVENTORY_FILE}" \
                             "${PLAYBOOK}" \
-                            --extra-vars "dlrsender_image=${NEXUS_HOST_REGISTRY}/${REPO_PATH}:${params.IMAGE_TAG.trim()} \
-                                          dlrsender_registry=${NEXUS_HOST_REGISTRY} \
-                                          dlrsender_registry_user=\$NEXUS_USER \
-                                          dlrsender_registry_pass=\$NEXUS_PASS \
-                                          target_environment=${params.ENVIRONMENT} \
-                                          rollback_enabled=${params.ROLLBACK_ENABLED}"
-                    """
+                            --extra-vars "dlrsender_image=${NEXUS_HOST_REGISTRY}/${REPO_PATH}:${IMAGE_TAG}" \
+                            --extra-vars "dlrsender_registry=${NEXUS_HOST_REGISTRY}" \
+                            --extra-vars "dlrsender_registry_user=${NEXUS_USER}" \
+                            --extra-vars "dlrsender_registry_pass=${NEXUS_PASS}" \
+                            --extra-vars "target_environment=${ENVIRONMENT}" \
+                            --extra-vars "rollback_enabled=${ROLLBACK_ENABLED}"
+
+                        echo
+                        echo "Ansible deployment completed successfully."
+                    '''
                 }
+            }
+        }
+
+        /*
+         * ---------------------------------------------------------
+         * 11. Final verification
+         * ---------------------------------------------------------
+         */
+        stage('Verify Deployment') {
+
+            steps {
+
+                sh '''
+                    set -e
+
+                    echo "=========================================="
+                    echo "Post Deployment Verification"
+                    echo "=========================================="
+
+                    echo
+                    echo "DLR Sender containers:"
+
+                    docker ps \
+                        --format 'table {{.Names}}\\t{{.Image}}\\t{{.Status}}\\t{{.Ports}}' \
+                        | grep -E 'dlrsender' || {
+                            echo "ERROR: No DLR Sender containers found."
+                            exit 1
+                        }
+
+                    echo
+                    echo "Deployment verification completed."
+                '''
             }
         }
     }
 
     post {
+
         success {
-            echo "=========================================="
-            echo "DEPLOYMENT SUCCESSFUL"
-            echo "=========================================="
+
+            echo '=========================================='
+            echo 'DEPLOYMENT SUCCESSFUL'
+            echo '=========================================='
+
             echo "Environment : ${params.ENVIRONMENT}"
-            echo "Image       : ${env.DLRSENDER_IMAGE}"
-            echo "All instances passed health checks."
+            echo "Image Tag   : ${params.IMAGE_TAG}"
+            echo "Repository  : ${env.REPO_PATH}"
+            echo "Rollback    : ${params.ROLLBACK_ENABLED}"
+
+            echo 'All configured DLR Sender instances passed deployment and health checks.'
         }
 
         failure {
-            echo "=========================================="
-            echo "DEPLOYMENT FAILED"
-            echo "=========================================="
+
+            echo '=========================================='
+            echo 'DEPLOYMENT FAILED'
+            echo '=========================================='
+
             echo "Environment : ${params.ENVIRONMENT}"
-            echo "Image       : ${env.DLRSENDER_IMAGE}"
-            echo "If ROLLBACK_ENABLED was true, check the"
-            echo "'Deploy via Ansible' logs for rollback status."
+            echo "Image Tag   : ${params.IMAGE_TAG}"
+            echo "Repository  : ${env.REPO_PATH}"
+
+            echo
+            echo 'If rollback was enabled, check the Ansible deployment logs.'
+            echo 'Ansible will attempt to restore the previous known-good image.'
+        }
+
+        always {
+
+            sh '''
+                rm -f /tmp/nexus_manifest.json
+                rm -f /tmp/nexus_root_response
+            '''
         }
     }
 }
