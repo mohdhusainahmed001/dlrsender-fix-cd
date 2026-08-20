@@ -109,7 +109,7 @@ pipeline {
                         passwordVariable: 'NEXUS_PASS'
                     )
                 ]) {
-                    sh """
+                    sh '''
                         HTTP_STATUS=\\$(curl -s \
                             -o /tmp/nexus_check_response.json \
                             -w "%{http_code}" \
@@ -127,7 +127,7 @@ pipeline {
                         fi
 
                         echo "Image ${DLRSENDER_IMAGE} exists in Nexus."
-                    """
+                    '''
                 }
             }
         }
