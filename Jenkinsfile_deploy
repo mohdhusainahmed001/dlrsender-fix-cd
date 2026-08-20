@@ -14,7 +14,7 @@ pipeline {
         ANSIBLE_DIR    = 'ansible'
         INVENTORY_FILE = "${ANSIBLE_DIR}/inventory/${params.ENVIRONMENT}.ini"
         PLAYBOOK       = "${ANSIBLE_DIR}/deploy.yml"
-        NEXUS_CREDS_ID = 'nexus-cred'   // matches the CI pipeline's credential ID
+        NEXUS_CREDS_ID = 'nexus-creds'   // matches the CI pipeline's credential ID
     }
 
     options {
