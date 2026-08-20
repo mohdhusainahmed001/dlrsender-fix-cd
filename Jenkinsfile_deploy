@@ -10,11 +10,11 @@ pipeline {
     environment {
         REGISTRY_URL   = 'localhost:8082'   // Nexus docker registry port, published to host - same convention your CI pipeline already uses successfully
         REPO_PATH      = "onex-docker/erlang-dlrsender/${params.ENVIRONMENT}"
-        DLRSENDER_IMAGE = "${REGISTRY_URL}/${REPO_PATH}:${params.IMAGE_TAG}"
+        DLRSENDER_IMAGE = "${REGISTRY_URL}/${REPO_PATH}:${params.IMAGE_TAG.trim()}"
         ANSIBLE_DIR    = 'ansible'
         INVENTORY_FILE = "${ANSIBLE_DIR}/inventory/${params.ENVIRONMENT}.ini"
         PLAYBOOK       = "${ANSIBLE_DIR}/deploy.yml"
-        NEXUS_CREDS_ID = 'nexus-creds'   // matches the CI pipeline's credential ID
+        NEXUS_CREDS_ID = 'nexus-creds'   // matches the credential ID configured in Jenkins
     }
 
     options {
@@ -31,8 +31,8 @@ pipeline {
                     if (!params.IMAGE_TAG?.trim()) {
                         error("IMAGE_TAG is required, e.g. the tag your CI pipeline just pushed to ${env.REGISTRY_URL}/${env.REPO_PATH}")
                     }
-                    if (!(params.IMAGE_TAG ==~ /^[a-zA-Z0-9_.\-]+$/)) {
-                        error("IMAGE_TAG contains invalid characters: ${params.IMAGE_TAG}")
+                    if (!(params.IMAGE_TAG.trim() ==~ /^[a-zA-Z0-9_.\-]+$/)) {
+                        error("IMAGE_TAG contains invalid characters: '${params.IMAGE_TAG}'")
                     }
                     echo "Deploying ${env.DLRSENDER_IMAGE} to ${params.ENVIRONMENT}"
                 }
@@ -67,8 +67,9 @@ pipeline {
             steps {
                 withCredentials([usernamePassword(credentialsId: "${NEXUS_CREDS_ID}", usernameVariable: 'NEXUS_USER', passwordVariable: 'NEXUS_PASS')]) {
                     sh """
-                        echo "\$NEXUS_PASS" | docker login ${REGISTRY_URL} -u "\$NEXUS_USER" --password-stdin
-                        docker manifest inspect ${DLRSENDER_IMAGE} > /dev/null \
+                        curl -sf -u "\$NEXUS_USER:\$NEXUS_PASS" \
+                            -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+                            http://${REGISTRY_URL}/v2/${REPO_PATH}/manifests/${params.IMAGE_TAG.trim()} > /dev/null \
                             || (echo "Image ${DLRSENDER_IMAGE} not found in Nexus" && exit 1)
                     """
                 }
@@ -77,12 +78,17 @@ pipeline {
 
         stage('Deploy via Ansible') {
             steps {
-                sh """
-                    ansible-playbook -i ${INVENTORY_FILE} ${PLAYBOOK} \
-                        --extra-vars "dlrsender_image=${DLRSENDER_IMAGE} \
-                                      target_environment=${params.ENVIRONMENT} \
-                                      rollback_enabled=${params.ROLLBACK_ENABLED}"
-                """
+                withCredentials([usernamePassword(credentialsId: "${NEXUS_CREDS_ID}", usernameVariable: 'NEXUS_USER', passwordVariable: 'NEXUS_PASS')]) {
+                    sh """
+                        ansible-playbook -i ${INVENTORY_FILE} ${PLAYBOOK} \
+                            --extra-vars "dlrsender_image=${DLRSENDER_IMAGE} \
+                                          dlrsender_registry=${REGISTRY_URL} \
+                                          dlrsender_registry_user=\$NEXUS_USER \
+                                          dlrsender_registry_pass=\$NEXUS_PASS \
+                                          target_environment=${params.ENVIRONMENT} \
+                                          rollback_enabled=${params.ROLLBACK_ENABLED}"
+                    """
+                }
             }
         }
     }

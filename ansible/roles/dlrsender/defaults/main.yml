@@ -31,6 +31,10 @@ dlrsender_compose_file: ""          # e.g. /opt/platform/docker-compose.yml
 dlrsender_compose_service: dlrsender
 
 # --- health check + rollback ---
+dlrsender_registry: ""
+dlrsender_registry_user: ""
+dlrsender_registry_pass: ""
+
 rollback_enabled: true
 health_check_retries: 10
 health_check_delay: 5

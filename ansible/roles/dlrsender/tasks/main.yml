@@ -31,6 +31,14 @@
 
 - name: Deploy and verify DLR Sender
   block:
+    - name: Log in to Docker registry (if credentials provided)
+      community.docker.docker_login:
+        registry_url: "{{ dlrsender_registry }}"
+        username: "{{ dlrsender_registry_user }}"
+        password: "{{ dlrsender_registry_pass }}"
+      no_log: true
+      when: dlrsender_registry_user | length > 0
+
     - name: Pull requested image
       community.docker.docker_image:
         name: "{{ dlrsender_image }}"
