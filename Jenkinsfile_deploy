@@ -31,15 +31,30 @@ pipeline {
 
     environment {
 
+        /*
+         * Jenkins container -> Nexus
+         *
+         * Jenkins can resolve the Docker-network hostname "nexus".
+         */
         NEXUS_URL = 'http://nexus:8082'
 
-        NEXUS_REGISTRY = 'nexus:8082'
+        /*
+         * Host Docker daemon -> Nexus
+         *
+         * Ansible is controlling Docker on localhost.
+         * Therefore Docker must use the host-exposed Nexus address.
+         */
+        DOCKER_REGISTRY = 'localhost:8082'
 
         NEXUS_REPOSITORY =
             "onex-docker/erlang-dlrsender/${params.ENVIRONMENT}"
 
+        /*
+         * IMPORTANT:
+         * This image address is passed to Ansible/Docker.
+         */
         IMAGE =
-            "${NEXUS_REGISTRY}/${NEXUS_REPOSITORY}:${params.IMAGE_TAG}"
+            "${DOCKER_REGISTRY}/${NEXUS_REPOSITORY}:${params.IMAGE_TAG}"
 
         INVENTORY =
             "ansible/inventory/${params.ENVIRONMENT}.ini"
@@ -84,12 +99,14 @@ pipeline {
 ==========================================
 DLR Sender Deployment
 ==========================================
-Environment : ${params.ENVIRONMENT}
-Image Tag   : ${params.IMAGE_TAG}
-Repository  : ${env.NEXUS_REPOSITORY}
-Image       : ${env.IMAGE}
-Inventory   : ${env.INVENTORY}
-Rollback    : ${params.ROLLBACK_ENABLED}
+Environment      : ${params.ENVIRONMENT}
+Image Tag        : ${params.IMAGE_TAG}
+Repository       : ${env.NEXUS_REPOSITORY}
+Jenkins Nexus    : ${env.NEXUS_URL}
+Docker Registry   : ${env.DOCKER_REGISTRY}
+Image            : ${env.IMAGE}
+Inventory        : ${env.INVENTORY}
+Rollback         : ${params.ROLLBACK_ENABLED}
 ==========================================
 """
                 }
