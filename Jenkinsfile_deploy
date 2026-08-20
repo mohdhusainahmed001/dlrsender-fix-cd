@@ -8,7 +8,7 @@ pipeline {
     }
 
     environment {
-        REGISTRY_URL   = 'localhost:8082'   // Nexus docker registry port, published to host - same convention your CI pipeline already uses successfully
+        REGISTRY_URL   = 'nexus:8082'   // Nexus docker registry port, published to host - same convention your CI pipeline already uses successfully
         REPO_PATH      = "onex-docker/erlang-dlrsender/${params.ENVIRONMENT}"
         DLRSENDER_IMAGE = "${REGISTRY_URL}/${REPO_PATH}:${params.IMAGE_TAG.trim()}"
         ANSIBLE_DIR    = 'ansible'
