@@ -21,16 +21,16 @@ pipeline {
         booleanParam(
             name: 'ROLLBACK_ENABLED',
             defaultValue: true,
-            description: 'Automatically rollback to the previous known-good image if deployment or health checks fail'
+            description: 'Rollback to previous known-good image if deployment fails'
         )
     }
 
     environment {
 
-        // Jenkins container -> Nexus container
+        // Nexus address from Jenkins agent
         REGISTRY_URL = 'nexus:8082'
 
-        // Docker host / Ansible target -> Nexus
+        // Nexus address from Docker/Ansible localhost
         NEXUS_HOST_REGISTRY = 'localhost:8082'
 
         // Ansible
@@ -56,12 +56,6 @@ pipeline {
 
     stages {
 
-        /*
-         * =========================================================
-         * 1. Validate parameters
-         * =========================================================
-         */
-
         stage('Validate Parameters') {
 
             steps {
@@ -71,21 +65,15 @@ pipeline {
                     def imageTag = params.IMAGE_TAG?.trim()
 
                     if (!imageTag) {
-                        error(
-                            'IMAGE_TAG is required. Example: omni_v2-48'
-                        )
+                        error('IMAGE_TAG is required. Example: omni_v2-48')
                     }
 
                     if (!(imageTag ==~ /^[a-zA-Z0-9_.-]+$/)) {
-                        error(
-                            "IMAGE_TAG contains invalid characters: '${imageTag}'"
-                        )
+                        error("Invalid IMAGE_TAG: ${imageTag}")
                     }
 
                     env.IMAGE_TAG_CLEAN = imageTag
-
-                    env.REPO_PATH =
-                        "onex-docker/erlang-dlrsender/${params.ENVIRONMENT}"
+                    env.REPO_PATH = "onex-docker/erlang-dlrsender/${params.ENVIRONMENT}"
 
                     env.DLRSENDER_IMAGE =
                         "${env.NEXUS_HOST_REGISTRY}/${env.REPO_PATH}:${imageTag}"
@@ -96,26 +84,19 @@ pipeline {
                     env.INVENTORY_FILE =
                         "${env.ANSIBLE_DIR}/inventory/${params.ENVIRONMENT}.ini"
 
-                    echo '=========================================='
-                    echo 'DLR Sender Deployment Parameters'
-                    echo '=========================================='
-                    echo "Environment       : ${params.ENVIRONMENT}"
-                    echo "Image Tag         : ${imageTag}"
-                    echo "Repository        : ${env.REPO_PATH}"
-                    echo "Host Image        : ${env.DLRSENDER_IMAGE}"
-                    echo "Jenkins Image     : ${env.DLRSENDER_JENKINS_IMAGE}"
-                    echo "Inventory         : ${env.INVENTORY_FILE}"
-                    echo "Rollback Enabled  : ${params.ROLLBACK_ENABLED}"
-                    echo '=========================================='
+                    echo "=========================================="
+                    echo "DLR Sender Deployment"
+                    echo "=========================================="
+                    echo "Environment : ${params.ENVIRONMENT}"
+                    echo "Image Tag   : ${imageTag}"
+                    echo "Repository  : ${env.REPO_PATH}"
+                    echo "Image       : ${env.DLRSENDER_IMAGE}"
+                    echo "Inventory   : ${env.INVENTORY_FILE}"
+                    echo "Rollback    : ${params.ROLLBACK_ENABLED}"
+                    echo "=========================================="
                 }
             }
         }
-
-        /*
-         * =========================================================
-         * 2. Checkout
-         * =========================================================
-         */
 
         stage('Checkout') {
 
@@ -126,16 +107,11 @@ pipeline {
                 sh '''
                     set -e
 
-                    echo "=========================================="
-                    echo "Repository Checkout"
-                    echo "=========================================="
-
-                    echo "Working directory:"
-                    pwd
+                    echo "Repository checkout successful."
 
                     echo
-                    echo "Repository files:"
-                    ls -la
+                    echo "Current directory:"
+                    pwd
 
                     echo
                     echo "Ansible files:"
@@ -144,41 +120,23 @@ pipeline {
             }
         }
 
-        /*
-         * =========================================================
-         * 3. Validate Ansible configuration
-         * =========================================================
-         */
-
-        stage('Validate Ansible Configuration') {
+        stage('Validate Ansible') {
 
             steps {
 
                 sh '''
                     set -e
 
-                    echo "=========================================="
-                    echo "Validating Ansible Configuration"
-                    echo "=========================================="
+                    echo "Checking required Ansible files..."
 
-                    test -f "${INVENTORY_FILE}" || {
-                        echo "ERROR: Inventory file not found:"
-                        echo "${INVENTORY_FILE}"
-                        exit 1
-                    }
-
-                    test -f "${PLAYBOOK}" || {
-                        echo "ERROR: Playbook not found:"
-                        echo "${PLAYBOOK}"
-                        exit 1
-                    }
-
+                    test -f "${INVENTORY_FILE}"
+                    test -f "${PLAYBOOK}"
                     test -f "ansible/roles/dlrsender/tasks/main.yml"
                     test -f "ansible/roles/dlrsender/tasks/deploy_standalone.yml"
                     test -f "ansible/roles/dlrsender/tasks/healthcheck.yml"
                     test -f "ansible/roles/dlrsender/tasks/rollback.yml"
 
-                    echo "Required files are present."
+                    echo "Required files found."
 
                     echo
                     echo "Validating inventory..."
@@ -192,22 +150,12 @@ pipeline {
             }
         }
 
-        /*
-         * =========================================================
-         * 4. Ansible syntax check
-         * =========================================================
-         */
-
         stage('Ansible Syntax Check') {
 
             steps {
 
                 sh '''
                     set -e
-
-                    echo "=========================================="
-                    echo "Ansible Syntax Check"
-                    echo "=========================================="
 
                     ansible-playbook \
                         -i "${INVENTORY_FILE}" \
@@ -219,12 +167,6 @@ pipeline {
             }
         }
 
-        /*
-         * =========================================================
-         * 5. Check Jenkins -> Nexus
-         * =========================================================
-         */
-
         stage('Check Nexus Connectivity') {
 
             steps {
@@ -232,46 +174,36 @@ pipeline {
                 sh '''
                     set -e
 
-                    echo "=========================================="
-                    echo "Checking Jenkins -> Nexus Connectivity"
-                    echo "=========================================="
+                    echo "Checking Jenkins -> Nexus..."
 
                     HTTP_STATUS=$(curl -s \
-                        -o /tmp/nexus_root_response \
+                        -o /tmp/nexus_response \
                         -w "%{http_code}" \
                         "http://${REGISTRY_URL}/v2/")
 
                     echo "Nexus HTTP status: ${HTTP_STATUS}"
 
-                    # 401 is expected because Docker Registry requires authentication.
-                    if [ "${HTTP_STATUS}" != "401" ] && [ "${HTTP_STATUS}" != "200" ]; then
+                    if [ "${HTTP_STATUS}" != "200" ] &&
+                       [ "${HTTP_STATUS}" != "401" ]; then
 
-                        echo "ERROR: Jenkins cannot reach Nexus."
+                        echo "ERROR: Cannot reach Nexus."
 
-                        if [ -f /tmp/nexus_root_response ]; then
-                            cat /tmp/nexus_root_response
-                        fi
+                        cat /tmp/nexus_response || true
 
                         exit 1
                     fi
 
-                    echo "SUCCESS: Jenkins can reach Nexus."
+                    echo "Nexus connectivity successful."
                 '''
             }
         }
-
-        /*
-         * =========================================================
-         * 6. Approval for UAT / PROD
-         * =========================================================
-         */
 
         stage('Approval') {
 
             when {
 
                 expression {
-                    params.ENVIRONMENT in ['uat', 'prod']
+                    return params.ENVIRONMENT in ['uat', 'prod']
                 }
             }
 
@@ -284,13 +216,7 @@ pipeline {
             }
         }
 
-        /*
-         * =========================================================
-         * 7. Verify Docker image exists in Nexus
-         * =========================================================
-         */
-
-        stage('Verify Image Exists in Nexus') {
+        stage('Verify Image in Nexus') {
 
             steps {
 
@@ -305,13 +231,10 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "=========================================="
-                        echo "Checking DLR Sender Image in Nexus"
-                        echo "=========================================="
+                        echo "Checking Docker image in Nexus..."
 
-                        echo "Repository : ${REPO_PATH}"
-                        echo "Image Tag  : ${IMAGE_TAG_CLEAN}"
-                        echo "Image      : ${DLRSENDER_JENKINS_IMAGE}"
+                        echo "Repository: ${REPO_PATH}"
+                        echo "Tag       : ${IMAGE_TAG_CLEAN}"
 
                         HTTP_STATUS=$(curl -s \
                             -o /tmp/nexus_manifest.json \
@@ -320,59 +243,45 @@ pipeline {
                             -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
                             "http://${REGISTRY_URL}/v2/${REPO_PATH}/manifests/${IMAGE_TAG_CLEAN}")
 
-                        echo
-                        echo "Nexus HTTP status: ${HTTP_STATUS}"
+                        echo "Nexus response: HTTP ${HTTP_STATUS}"
 
                         if [ "${HTTP_STATUS}" != "200" ]; then
 
-                            echo
-                            echo "ERROR: Docker image does not exist in Nexus."
-                            echo "Repository : ${REPO_PATH}"
-                            echo "Tag        : ${IMAGE_TAG_CLEAN}"
-                            echo "HTTP       : ${HTTP_STATUS}"
+                            echo "ERROR: Image does not exist in Nexus."
 
-                            if [ -s /tmp/nexus_manifest.json ]; then
-                                echo
-                                echo "Nexus response:"
-                                cat /tmp/nexus_manifest.json
-                            fi
+                            echo "Image:"
+                            echo "${DLRSENDER_JENKINS_IMAGE}"
+
+                            echo "Nexus response:"
+
+                            cat /tmp/nexus_manifest.json || true
 
                             exit 1
                         fi
 
-                        echo
-                        echo "SUCCESS: Docker image exists in Nexus."
-                        echo "Image: ${DLRSENDER_JENKINS_IMAGE}"
+                        echo "SUCCESS: Image exists in Nexus."
                     '''
                 }
             }
         }
 
-        /*
-         * =========================================================
-         * 8. Validate Docker access
-         * =========================================================
-         */
-
-        stage('Validate Docker Access') {
+        stage('Validate Docker') {
 
             steps {
 
                 sh '''
                     set -e
 
-                    echo "=========================================="
-                    echo "Validating Docker Access"
-                    echo "=========================================="
+                    echo "Checking Docker..."
 
                     docker version
 
                     echo
-                    echo "Docker containers:"
+                    echo "DLR Sender containers currently running:"
 
                     docker ps \
-                        --format 'table {{.Names}}\\t{{.Image}}\\t{{.Status}}' \
-                        | head -30
+                        --format 'table {{.Names}}\\t{{.Image}}\\t{{.Status}}\\t{{.Ports}}' \
+                        | grep -i dlrsender || true
 
                     echo
                     echo "Docker access successful."
@@ -380,22 +289,12 @@ pipeline {
             }
         }
 
-        /*
-         * =========================================================
-         * 9. Validate Ansible Docker access
-         * =========================================================
-         */
-
         stage('Validate Ansible Docker Access') {
 
             steps {
 
                 sh '''
                     set -e
-
-                    echo "=========================================="
-                    echo "Validating Ansible Docker Access"
-                    echo "=========================================="
 
                     echo "Testing Ansible connectivity..."
 
@@ -405,7 +304,7 @@ pipeline {
                         -m ping
 
                     echo
-                    echo "Testing community.docker collection..."
+                    echo "Testing community.docker..."
 
                     ansible \
                         -i "${INVENTORY_FILE}" \
@@ -417,12 +316,6 @@ pipeline {
                 '''
             }
         }
-
-        /*
-         * =========================================================
-         * 10. Deploy using Ansible
-         * =========================================================
-         */
 
         stage('Deploy via Ansible') {
 
@@ -456,20 +349,17 @@ pipeline {
 
                         if ! sudo -n true 2>/dev/null; then
 
-                            echo
                             echo "ERROR: Jenkins agent does not have passwordless sudo."
-                            echo
-                            echo "Your Ansible playbook uses become: true."
-                            echo "Configure the Jenkins agent user with NOPASSWD sudo."
-                            echo
+                            echo "Ansible uses become: true."
+                            echo "Configure NOPASSWD sudo for the Jenkins agent user."
 
                             exit 1
                         fi
 
-                        echo "Passwordless sudo check successful."
+                        echo "Sudo access OK."
 
                         echo
-                        echo "Running Ansible deployment..."
+                        echo "Running Ansible..."
 
                         ansible-playbook \
                             -i "${INVENTORY_FILE}" \
@@ -482,17 +372,11 @@ pipeline {
                             --extra-vars "rollback_enabled=${ROLLBACK_ENABLED}"
 
                         echo
-                        echo "Ansible deployment completed successfully."
+                        echo "Ansible deployment completed."
                     '''
                 }
             }
         }
-
-        /*
-         * =========================================================
-         * 11. Verify deployment
-         * =========================================================
-         */
 
         stage('Verify Deployment') {
 
@@ -502,7 +386,7 @@ pipeline {
                     set -e
 
                     echo "=========================================="
-                    echo "Post Deployment Verification"
+                    echo "Deployment Verification"
                     echo "=========================================="
 
                     echo
@@ -510,95 +394,86 @@ pipeline {
 
                     docker ps \
                         --format 'table {{.Names}}\\t{{.Image}}\\t{{.Status}}\\t{{.Ports}}' \
-                        | grep -E 'dlrsender' || {
-
-                            echo "ERROR: No DLR Sender containers found."
-
-                            exit 1
-                        }
+                        | grep -i dlrsender
 
                     echo
                     echo "Checking DLR Sender health endpoints..."
+
+                    FAILED=0
 
                     for PORT in 15001 15002
                     do
 
                         echo
-                        echo "Checking http://127.0.0.1:${PORT}/metrics"
+                        echo "Checking port ${PORT}..."
 
                         HTTP_STATUS=$(curl -s \
-                            -o /tmp/dlrsender_${PORT}_metrics \
+                            -o "/tmp/dlrsender_${PORT}.json" \
                             -w "%{http_code}" \
                             "http://127.0.0.1:${PORT}/metrics")
 
                         echo "HTTP status: ${HTTP_STATUS}"
 
-                        if [ "${HTTP_STATUS}" != "200" ]; then
+                        if [ "${HTTP_STATUS}" = "200" ]; then
+                            echo "Port ${PORT}: HEALTHY"
+                        else
+                            echo "Port ${PORT}: FAILED"
+                            FAILED=1
 
-                            echo "ERROR: DLR Sender health check failed on port ${PORT}"
-
-                            if [ -s "/tmp/dlrsender_${PORT}_metrics" ]; then
-                                cat "/tmp/dlrsender_${PORT}_metrics"
-                            fi
-
-                            exit 1
+                            cat "/tmp/dlrsender_${PORT}.json" || true
                         fi
-
-                        echo "Port ${PORT}: HEALTHY"
 
                     done
 
+                    if [ "${FAILED}" -ne 0 ]; then
+                        echo
+                        echo "ERROR: One or more DLR Sender instances failed."
+                        exit 1
+                    fi
+
                     echo
-                    echo "Deployment verification successful."
+                    echo "All DLR Sender instances are healthy."
                 '''
             }
         }
     }
 
-    /*
-     * =============================================================
-     * POST ACTIONS
-     * =============================================================
-     */
-
     post {
 
         success {
 
-            echo '=========================================='
-            echo 'DLR SENDER DEPLOYMENT SUCCESSFUL'
-            echo '=========================================='
+            echo "=========================================="
+            echo "DLR SENDER DEPLOYMENT SUCCESSFUL"
+            echo "=========================================="
 
-            echo "Environment      : ${params.ENVIRONMENT}"
-            echo "Image Tag        : ${params.IMAGE_TAG}"
-            echo "Repository       : ${env.REPO_PATH}"
-            echo "Docker Image     : ${env.DLRSENDER_IMAGE}"
-            echo "Rollback Enabled : ${params.ROLLBACK_ENABLED}"
+            echo "Environment : ${params.ENVIRONMENT}"
+            echo "Image Tag   : ${params.IMAGE_TAG}"
+            echo "Image       : ${env.DLRSENDER_IMAGE}"
+            echo "Rollback    : ${params.ROLLBACK_ENABLED}"
 
-            echo 'All configured DLR Sender instances passed deployment and health checks.'
+            echo "All DLR Sender instances passed health checks."
         }
 
         failure {
 
-            echo '=========================================='
-            echo 'DLR SENDER DEPLOYMENT FAILED'
-            echo '=========================================='
+            echo "=========================================="
+            echo "DLR SENDER DEPLOYMENT FAILED"
+            echo "=========================================="
 
             echo "Environment : ${params.ENVIRONMENT}"
             echo "Image Tag   : ${params.IMAGE_TAG}"
-            echo "Repository  : ${env.REPO_PATH}"
+            echo "Image       : ${env.DLRSENDER_IMAGE}"
 
-            echo 'If rollback was enabled, check the Ansible deployment logs.'
-            echo 'Ansible will attempt to restore the previous known-good image.'
+            echo "Check the Ansible logs for deployment/rollback details."
         }
 
         always {
 
             sh '''
+                rm -f /tmp/nexus_response || true
                 rm -f /tmp/nexus_manifest.json || true
-                rm -f /tmp/nexus_root_response || true
-                rm -f /tmp/dlrsender_15001_metrics || true
-                rm -f /tmp/dlrsender_15002_metrics || true
+                rm -f /tmp/dlrsender_15001.json || true
+                rm -f /tmp/dlrsender_15002.json || true
             '''
         }
     }
