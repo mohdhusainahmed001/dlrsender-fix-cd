@@ -67,10 +67,15 @@ pipeline {
             steps {
                 withCredentials([usernamePassword(credentialsId: "${NEXUS_CREDS_ID}", usernameVariable: 'NEXUS_USER', passwordVariable: 'NEXUS_PASS')]) {
                     sh """
-                        curl -sf -u "\$NEXUS_USER:\$NEXUS_PASS" \
+                        HTTP_STATUS=\$(curl -s -o /tmp/nexus_check_response.json -w "%{http_code}" -u "\$NEXUS_USER:\$NEXUS_PASS" \
                             -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
-                            http://${REGISTRY_URL}/v2/${REPO_PATH}/manifests/${params.IMAGE_TAG.trim()} > /dev/null \
-                            || (echo "Image ${DLRSENDER_IMAGE} not found in Nexus" && exit 1)
+                            http://${REGISTRY_URL}/v2/${REPO_PATH}/manifests/${params.IMAGE_TAG.trim()})
+                        echo "Nexus responded with HTTP \$HTTP_STATUS"
+                        cat /tmp/nexus_check_response.json
+                        if [ "\$HTTP_STATUS" != "200" ]; then
+                            echo "Image ${DLRSENDER_IMAGE} not found in Nexus (HTTP \$HTTP_STATUS)"
+                            exit 1
+                        fi
                     """
                 }
             }
