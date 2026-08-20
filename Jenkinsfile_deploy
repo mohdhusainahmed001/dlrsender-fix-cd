@@ -1,4 +1,3 @@
-```groovy
 pipeline {
     agent { label 'erlang-agent' }
 
@@ -24,14 +23,16 @@ pipeline {
 
     environment {
         // Jenkins container -> Nexus container
+        // Used by the Verify Image Exists stage
         REGISTRY_URL = 'nexus:8082'
 
-        // Docker daemon on localhost/host -> Nexus
+        // Host Docker daemon -> Nexus
+        // Used by Ansible during docker login/pull
         NEXUS_HOST_REGISTRY = 'localhost:8082'
 
         REPO_PATH = "onex-docker/erlang-dlrsender/${params.ENVIRONMENT}"
 
-        // Used for Jenkins-side Nexus verification
+        // Image address used inside Jenkins
         DLRSENDER_IMAGE = "${REGISTRY_URL}/${REPO_PATH}:${params.IMAGE_TAG.trim()}"
 
         ANSIBLE_DIR = 'ansible'
@@ -114,7 +115,7 @@ pipeline {
                             -w "%{http_code}" \
                             -u "\\$NEXUS_USER:\\$NEXUS_PASS" \
                             -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
-                            http://${REGISTRY_URL}/v2/${REPO_PATH}/manifests/${params.IMAGE_TAG.trim()})
+                            "http://${REGISTRY_URL}/v2/${REPO_PATH}/manifests/${params.IMAGE_TAG.trim()}")
 
                         echo "Nexus responded with HTTP \\$HTTP_STATUS"
 
@@ -124,6 +125,8 @@ pipeline {
                             echo "Image ${DLRSENDER_IMAGE} not found in Nexus (HTTP \\$HTTP_STATUS)"
                             exit 1
                         fi
+
+                        echo "Image ${DLRSENDER_IMAGE} exists in Nexus."
                     """
                 }
             }
@@ -163,4 +166,3 @@ pipeline {
         }
     }
 }
-```
