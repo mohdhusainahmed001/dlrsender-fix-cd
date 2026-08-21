@@ -42,6 +42,6 @@ dlrsender_registry_pass: ""
 
 # --- health check + rollback ---
 rollback_enabled: true
-health_check_retries: 10
-health_check_delay: 5
+health_check_retries: 40
+health_check_delay: 10
 dlrsender_state_dir: /opt/dlrsender/state
