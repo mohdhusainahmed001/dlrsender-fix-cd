@@ -1,13 +1,15 @@
 ---
+dlrsender_registry_ip: "127.0.0.1"
+dlrsender_registry_port: 8078
+
 dlrsender_instances:
   - name: dlrsender-1
     container_name: dlrsender-1
     host_port: 15001
     container_port: 15000
-    kafka_brokers: "10.20.3.101:9092,10.20.3.102:9092"
-
+    kafka_brokers: "kafka:29092"
   - name: dlrsender-2
     container_name: dlrsender-2
     host_port: 15002
     container_port: 15000
-    kafka_brokers: "10.20.3.101:9092,10.20.3.102:9092"
+    kafka_brokers: "kafka:29092"
