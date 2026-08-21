@@ -6,25 +6,20 @@
   loop: "{{ dlrsender_instances }}"
   loop_control:
     label: "{{ item.name }}"
-
 - name: Run DLR Sender container(s)
   community.docker.docker_container:
     name: "{{ item.container_name }}"
     image: "{{ dlrsender_image }}"
     state: started
     restart_policy: "{{ dlrsender_restart_policy }}"
-
     networks:
       - name: "{{ dlrsender_network }}"
-
     ports:
       - "{{ item.host_port }}:{{ item.container_port | default(dlrsender_container_port) }}"
-
     env:
       KAFKA_BROKERS: "{{ item.kafka_brokers | default(dlrsender_kafka_brokers) }}"
-      REGISTRY_IP: "{{ dlrsender_registry_ip }}"
-      REGISTRY_PORT: "{{ dlrsender_registry_port }}"
-
+      REGISTRY_IP: "{{ dlrsender_registry_ip | string }}"
+      REGISTRY_PORT: "{{ dlrsender_registry_port | string }}"
   loop: "{{ dlrsender_instances }}"
   loop_control:
     label: "{{ item.name }}"
