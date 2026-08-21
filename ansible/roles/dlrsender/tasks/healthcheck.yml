@@ -1,7 +1,7 @@
 ---
 - name: Check DLR Sender HTTP metrics endpoint
   ansible.builtin.uri:
-    url: "http://127.0.0.1:{{ item.host_port }}/metrics"
+    url: "http://{{ item.container_name }}:{{ item.container_port | default(dlrsender_container_port) }}/metrics"
     method: GET
     status_code: 200
     return_content: false
@@ -13,7 +13,6 @@
   loop_control:
     label: "{{ item.name }}"
   when: dlrsender_deploy_mode == 'standalone'
-
 - name: Verify each standalone container is actually running
   community.docker.docker_container_info:
     name: "{{ item.container_name }}"
@@ -25,7 +24,6 @@
   loop_control:
     label: "{{ item.name }}"
   when: dlrsender_deploy_mode == 'standalone'
-
 - name: Verify shared-compose DLR Sender service is running
   community.docker.docker_container_info:
     name: "{{ dlrsender_compose_service }}"
@@ -34,10 +32,9 @@
     not (dlrsender_health_compose.exists | default(false))
     or dlrsender_health_compose.container.State.Status != 'running'
   when: dlrsender_deploy_mode == 'shared_compose'
-
 - name: All instances healthy
   ansible.builtin.debug:
-    msg: "SUCCESS: {{ item.name }} healthy at http://127.0.0.1:{{ item.host_port }}/metrics"
+    msg: "SUCCESS: {{ item.name }} healthy at http://{{ item.container_name }}:{{ item.container_port | default(dlrsender_container_port) }}/metrics"
   loop: "{{ dlrsender_instances }}"
   loop_control:
     label: "{{ item.name }}"

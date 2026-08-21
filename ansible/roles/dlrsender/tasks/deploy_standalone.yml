@@ -14,6 +14,7 @@
     restart_policy: "{{ dlrsender_restart_policy }}"
     networks:
       - name: "{{ dlrsender_network }}"
+      - name: devops-net
     ports:
       - "{{ item.host_port }}:{{ item.container_port | default(dlrsender_container_port) }}"
     env:
